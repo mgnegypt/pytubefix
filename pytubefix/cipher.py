@@ -196,6 +196,60 @@ class Cipher:
                     self._sig_param_val = int(groups['param'])
                 return sig
 
+        # ── Fallback Strategy A ──────────────────────────────────────────────
+        # 2025+ TCE player: sigFunc(num, num, decodeURIComponent(X.s))
+        # Covers patterns like: BR(32,868,decodeURIComponent(e.s))
+        logger.debug("Trying fallback strategy A: TCE-style sig pattern")
+        for pat in [
+            r'(?P<sig>[a-zA-Z0-9$_]{1,4})\(\d+\s*,\s*\d+\s*,\s*decodeURIComponent\s*\([a-zA-Z0-9$_.]+\.s\)\)',
+            r'(?P<sig>[a-zA-Z0-9$_]{1,4})\((?P<param>\d+)\s*,\s*(?P<param2>\d+)\s*,[^)]{1,60}\.s\)',
+        ]:
+            m = re.search(pat, js)
+            if m:
+                sig = m.group('sig')
+                groups = m.groupdict()
+                if groups.get('param2'):
+                    self._sig_param_val = [int(groups['param']), int(groups['param2'])]
+                elif groups.get('param'):
+                    self._sig_param_val = int(groups['param'])
+                logger.debug(f"Fallback A matched sig: {sig}")
+                return sig
+
+        # ── Fallback Strategy B ──────────────────────────────────────────────
+        # Find any function that takes a string, splits it, does transforms, and joins
+        # This is the structural fingerprint of ALL YouTube sig functions
+        logger.debug("Trying fallback strategy B: structural sig fingerprint")
+        structural_patterns = [
+            # split("") ... join("") pattern — the core of every sig function
+            r'(?P<sig>[a-zA-Z0-9_$]{2,})\s*=\s*function\s*\(\s*\w+\s*\)\s*\{[^}]{0,50}\.split\s*\(\s*["\']["\']?\s*\)[^}]{10,}\.join\s*\(',
+            # a=a.split pattern (very common variant)
+            r'\bfunction\s+(?P<sig>[a-zA-Z0-9_$]{2,})\s*\(\s*\w+\s*\)\s*\{[^}]*\.split\s*\([^)]*\)[^}]*\.join\s*\(',
+        ]
+        for pat in structural_patterns:
+            for m in re.finditer(pat, js):
+                candidate = m.group('sig')
+                # Make sure it's not a known non-sig function
+                func_start = m.start()
+                chunk = js[func_start:func_start + 1500]
+                # sig functions call a helper object with array of transforms
+                if re.search(r'[a-zA-Z0-9_$]{2,}\.[a-zA-Z0-9_$]{2,}\(', chunk):
+                    logger.debug(f"Fallback B matched sig: {candidate}")
+                    return candidate
+
+        # ── Fallback Strategy C ──────────────────────────────────────────────
+        # Look for where encodeURIComponent wraps a function call in stream URLs
+        # This is how YouTube calls the sig function to build the final URL
+        logger.debug("Trying fallback strategy C: encodeURIComponent call site")
+        for pat in [
+            r'encodeURIComponent\s*\(\s*(?P<sig>[a-zA-Z0-9_$]{2,})\s*\(',
+            r'\.set\s*\([^,]+,\s*encodeURIComponent\s*\(\s*(?P<sig>[a-zA-Z0-9_$]{2,})\s*\(',
+        ]:
+            m = re.search(pat, js)
+            if m:
+                sig = m.group('sig')
+                logger.debug(f"Fallback C matched sig: {sig}")
+                return sig
+
         raise RegexMatchError(
             caller="get_initial_function_name", pattern=f"multiple in {js_url}"
         )
