@@ -32,7 +32,8 @@ class Stream:
     """Container for stream manifest data."""
 
     def __init__(
-        self, stream: Dict, monostate: Monostate, po_token: str, video_playback_ustreamer_config: str
+        self, stream: Dict, monostate: Monostate, po_token: str, video_playback_ustreamer_config: str,
+        client_headers: Optional[Dict] = None
     ):
         """Construct a :class:`Stream <Stream>`.
 
@@ -41,10 +42,21 @@ class Stream:
         :param dict monostate:
             Dictionary of data shared across all instances of
             :class:`Stream <Stream>`.
+        :param dict client_headers:
+            Client-specific HTTP headers from the InnerTube client that fetched
+            the stream manifest. When provided, these headers are forwarded with
+            every download request so that the User-Agent and other identifiers
+            match what YouTube expects, preventing HTTP 403 Forbidden errors on
+            videos that enforce header consistency between the manifest request
+            and the actual media download.
         """
         # A dictionary shared between all instances of :class:`Stream <Stream>`
         # (Borg pattern).
         self._monostate = monostate
+
+        # Client-specific headers used when downloading media chunks.
+        # Keeping them consistent with the InnerTube client avoids 403 errors.
+        self.client_headers = client_headers or {}
 
         self.url = stream["url"]  # signed download url
         self.itag = int(
@@ -398,7 +410,8 @@ class Stream:
                     for chunk in request.stream(
                         self.url,
                         timeout=timeout,
-                        max_retries=max_retries
+                        max_retries=max_retries,
+                        headers=self.client_headers or None
                     ):
                         if interrupt_checker is not None and interrupt_checker() == True:
                             logger.debug('interrupt_checker returned True, causing to force stop the downloading')
@@ -419,7 +432,8 @@ class Stream:
                     for chunk in request.seq_stream(
                         self.url,
                         timeout=timeout,
-                        max_retries=max_retries
+                        max_retries=max_retries,
+                        headers=self.client_headers or None
                     ):
                         if interrupt_checker is not None and interrupt_checker() == True:
                             logger.debug('interrupt_checker returned True, causing to force stop the downloading')
@@ -473,7 +487,7 @@ class Stream:
             "downloading (%s total bytes) file to buffer", self.filesize,
         )
 
-        for chunk in request.stream(self.url):
+        for chunk in request.stream(self.url, headers=self.client_headers or None):
             # reduce the (bytes) remainder by the length of the chunk.
             bytes_remaining -= len(chunk)
             # send to the on_progress callback.
@@ -596,11 +610,11 @@ class Stream:
             self.filesize,
         )
         try:
-            stream = request.stream(self.url)
+            stream = request.stream(self.url, headers=self.client_headers or None)
         except HTTPError as e:
             if e.code != 404:
                 raise
-            stream = request.seq_stream(self.url)
+            stream = request.seq_stream(self.url, headers=self.client_headers or None)
 
         for chunk in stream:
             bytes_remaining -= len(chunk)

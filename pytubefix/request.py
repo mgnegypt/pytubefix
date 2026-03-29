@@ -86,10 +86,12 @@ def post(url, extra_headers=None, data=None, timeout=socket._GLOBAL_DEFAULT_TIME
 def seq_stream(
             url,
             timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
-            max_retries=0):
+            max_retries=0,
+            headers=None):
 
     """Read the response in sequence.
     :param str url: The URL to perform the GET request for.
+    :param dict headers: Optional client-specific headers to include in requests.
     :rtype: Iterable[bytes]
     """
     # YouTube expects a request sequence number as part of the parameters.
@@ -104,7 +106,7 @@ def seq_stream(
     url = base_url + parse.urlencode(querys)
 
     segment_data = b''
-    for chunk in stream(url, timeout=timeout, max_retries=max_retries):
+    for chunk in stream(url, timeout=timeout, max_retries=max_retries, headers=headers):
         yield chunk
         segment_data += chunk
 
@@ -123,7 +125,7 @@ def seq_stream(
         querys['sq'] = seq_num
         url = base_url + parse.urlencode(querys)
 
-        yield from stream(url, timeout=timeout, max_retries=max_retries)
+        yield from stream(url, timeout=timeout, max_retries=max_retries, headers=headers)
         seq_num += 1
     return  # pylint: disable=R1711
 
@@ -131,9 +133,15 @@ def seq_stream(
 # TODO: Refactor this code
 def stream(url,
            timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
-           max_retries=0):
+           max_retries=0,
+           headers=None):
     """Read the response in chunks.
     :param str url: The URL to perform the GET request for.
+    :param dict headers: Optional client-specific headers to include in requests.
+        When provided, these headers are merged with the default base headers so
+        the download request matches the client that fetched the stream manifest.
+        This prevents HTTP 403 errors on videos where YouTube enforces header
+        consistency between the InnerTube API call and the actual media download.
     :rtype: Iterable[bytes]
     """
     file_size: int = default_range_size  # fake filesize to start
@@ -154,6 +162,7 @@ def stream(url,
                 response = _execute_request(
                     f"{url}&range={downloaded}-{stop_pos}",
                     method="GET",
+                    headers=headers,
                     timeout=timeout
                 )
             except URLError as e:
@@ -174,6 +183,7 @@ def stream(url,
                 resp = _execute_request(
                     f"{url}&range=0-99999999999",
                     method="GET",
+                    headers=headers,
                     timeout=timeout
                 )
                 content_range = resp.info()["Content-Length"]
