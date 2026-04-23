@@ -335,8 +335,7 @@ class AsyncYouTube:
                 stream=stream,
                 monostate=self.stream_monostate,
                 po_token=self.po_token,
-                video_playback_ustreamer_config=vid_info.get('playerConfig', {}).get('mediaCommonConfig', {}).get('mediaUstreamerRequestConfig', {}).get('videoPlaybackUstreamerConfig'),
-                client_headers=inner_tube.header
+                video_playback_ustreamer_config=vid_info.get('playerConfig', {}).get('mediaCommonConfig', {}).get('mediaUstreamerRequestConfig', {}).get('videoPlaybackUstreamerConfig')
             )
             self._fmt_streams.append(video)
     
@@ -390,8 +389,7 @@ class AsyncYouTube:
             stream=stream_data,
             monostate=self.stream_monostate,
             po_token=self.po_token,
-            video_playback_ustreamer_config=vid_info.get('playerConfig', {}).get('mediaCommonConfig', {}).get('mediaUstreamerRequestConfig', {}).get('videoPlaybackUstreamerConfig'),
-            client_headers=inner_tube.header
+            video_playback_ustreamer_config=vid_info.get('playerConfig', {}).get('mediaCommonConfig', {}).get('mediaUstreamerRequestConfig', {}).get('videoPlaybackUstreamerConfig')
         )
         return stream_obj
     

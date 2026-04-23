@@ -346,8 +346,7 @@ class YouTube:
                 stream=stream,
                 monostate=self.stream_monostate,
                 po_token=self.po_token,
-                video_playback_ustreamer_config=self.video_playback_ustreamer_config,
-                client_headers=inner_tube.header
+                video_playback_ustreamer_config=self.video_playback_ustreamer_config
             )
             self._fmt_streams.append(video)
 

@@ -27,23 +27,12 @@ from pytubefix.sabr.core.server_abr_stream import ServerAbrStream
 
 logger = logging.getLogger(__name__)
 
-# Clients that work without poToken — used as automatic fallback when a
-# primary download URL returns HTTP 403 (typically because the active client
-# requires a poToken that YouTube no longer accepts).
-_FALLBACK_CLIENTS = [
-    "TV_EMBED",
-    "ANDROID_VR",
-    "ANDROID_MUSIC",
-    "ANDROID_CREATOR",
-    "ANDROID_TESTSUITE",
-]
 
 class Stream:
     """Container for stream manifest data."""
 
     def __init__(
-        self, stream: Dict, monostate: Monostate, po_token: str, video_playback_ustreamer_config: str,
-        client_headers: Optional[Dict] = None
+        self, stream: Dict, monostate: Monostate, po_token: str, video_playback_ustreamer_config: str
     ):
         """Construct a :class:`Stream <Stream>`.
 
@@ -52,21 +41,10 @@ class Stream:
         :param dict monostate:
             Dictionary of data shared across all instances of
             :class:`Stream <Stream>`.
-        :param dict client_headers:
-            Client-specific HTTP headers from the InnerTube client that fetched
-            the stream manifest. When provided, these headers are forwarded with
-            every download request so that the User-Agent and other identifiers
-            match what YouTube expects, preventing HTTP 403 Forbidden errors on
-            videos that enforce header consistency between the manifest request
-            and the actual media download.
         """
         # A dictionary shared between all instances of :class:`Stream <Stream>`
         # (Borg pattern).
         self._monostate = monostate
-
-        # Client-specific headers used when downloading media chunks.
-        # Keeping them consistent with the InnerTube client avoids 403 errors.
-        self.client_headers = client_headers or {}
 
         self.url = stream["url"]  # signed download url
         self.itag = int(
@@ -420,8 +398,7 @@ class Stream:
                     for chunk in request.stream(
                         self.url,
                         timeout=timeout,
-                        max_retries=max_retries,
-                        headers=self.client_headers or None
+                        max_retries=max_retries
                     ):
                         if interrupt_checker is not None and interrupt_checker() == True:
                             logger.debug('interrupt_checker returned True, causing to force stop the downloading')
@@ -434,31 +411,7 @@ class Stream:
                     ServerAbrStream(stream=self, write_chunk=write_chunk, monostate=self._monostate).start()
 
             except HTTPError as e:
-                if e.code == 403:
-                    logger.warning(
-                        "HTTP 403 for itag %s — poToken enforcement suspected; "
-                        "attempting fallback clients automatically",
-                        self.itag,
-                    )
-                    fresh_url, fresh_headers = self._get_fresh_stream()
-                    if fresh_url:
-                        fh.seek(0)
-                        fh.truncate()
-                        bytes_remaining = self.filesize
-                        for chunk in request.stream(
-                            fresh_url,
-                            timeout=timeout,
-                            max_retries=max_retries,
-                            headers=fresh_headers or None,
-                        ):
-                            if interrupt_checker is not None and interrupt_checker() is True:
-                                logger.debug("interrupt_checker stopped download")
-                                return
-                            bytes_remaining -= len(chunk)
-                            write_chunk(chunk, bytes_remaining)
-                    else:
-                        raise
-                elif e.code != 404:
+                if e.code != 404:
                     raise
             except StopIteration:
                 if not self.is_sabr:
@@ -466,8 +419,7 @@ class Stream:
                     for chunk in request.seq_stream(
                         self.url,
                         timeout=timeout,
-                        max_retries=max_retries,
-                        headers=self.client_headers or None
+                        max_retries=max_retries
                     ):
                         if interrupt_checker is not None and interrupt_checker() == True:
                             logger.debug('interrupt_checker returned True, causing to force stop the downloading')
@@ -511,61 +463,6 @@ class Stream:
             and os.path.getsize(file_path) == self.filesize
         )
 
-    def _get_fresh_stream(self):
-        """Fetch a fresh stream URL using a no-poToken fallback client.
-
-        Called automatically when the primary download URL returns HTTP 403.
-        Since late 2024 YouTube enforces a valid poToken for several clients
-        (WEB, MWEB, ANDROID, IOS). Clients such as TV_EMBED, ANDROID_VR, and
-        ANDROID_MUSIC do not require a poToken and reliably produce working
-        download URLs.
-
-        The method temporarily switches the parent YouTube object to each
-        fallback client in order, fetches a fresh stream by matching itag,
-        then restores the original client before returning.
-
-        :returns:
-            Tuple of (url: str, headers: dict) on success, or (None, None)
-            if every fallback client also fails.
-        """
-        youtube = getattr(self._monostate, "youtube", None)
-        if youtube is None:
-            return None, None
-
-        original_client = youtube.client
-        original_fmt_streams = youtube._fmt_streams
-        original_vid_info = youtube._vid_info
-
-        result_url = None
-        result_headers = None
-
-        for client in _FALLBACK_CLIENTS:
-            if client == original_client:
-                continue
-            try:
-                logger.debug(
-                    "HTTP 403 on client %s — retrying with fallback client %s",
-                    original_client,
-                    client,
-                )
-                youtube.client = client
-                youtube._fmt_streams = None
-                youtube._vid_info = None
-                fresh = youtube.streams.get_by_itag(self.itag)
-                if fresh:
-                    result_url = fresh.url
-                    result_headers = fresh.client_headers
-                    break
-            except Exception as exc:
-                logger.debug("Fallback client %s failed: %s", client, exc)
-
-        # Always restore the original state so callers are not affected.
-        youtube.client = original_client
-        youtube._fmt_streams = original_fmt_streams
-        youtube._vid_info = original_vid_info
-
-        return result_url, result_headers
-
     def stream_to_buffer(self, buffer: BinaryIO) -> None:
         """Write the media stream to buffer
 
@@ -576,7 +473,7 @@ class Stream:
             "downloading (%s total bytes) file to buffer", self.filesize,
         )
 
-        for chunk in request.stream(self.url, headers=self.client_headers or None):
+        for chunk in request.stream(self.url):
             # reduce the (bytes) remainder by the length of the chunk.
             bytes_remaining -= len(chunk)
             # send to the on_progress callback.
@@ -699,11 +596,11 @@ class Stream:
             self.filesize,
         )
         try:
-            stream = request.stream(self.url, headers=self.client_headers or None)
+            stream = request.stream(self.url)
         except HTTPError as e:
             if e.code != 404:
                 raise
-            stream = request.seq_stream(self.url, headers=self.client_headers or None)
+            stream = request.seq_stream(self.url)
 
         for chunk in stream:
             bytes_remaining -= len(chunk)
@@ -711,4 +608,3 @@ class Stream:
             yield chunk
 
         self.on_complete(None)
-
